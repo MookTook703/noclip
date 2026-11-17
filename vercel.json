@@ -1,0 +1,1 @@
+{"version":2,"functions":{"api/server.js":{"maxDuration":300}},"rewrites":[{"source":"/ws","destination":"/api/server.js"}]}

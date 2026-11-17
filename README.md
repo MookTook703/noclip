@@ -1,5 +1,5 @@
 # NOCLIP ONLINE
 
-Backrooms 2D multiplayer prototype. Client and server sources are in this repository.
+Browser-based Backrooms multiplayer prototype (levels 0–20). Client is in `public/`, server source in `api/server.js`. The Node WebSocket server requires a persistent host; Vercel serves the static website.
 
-Deployment: Vercel for the website; realtime backend configuration needs verification.
+Run locally: `npm install && npm start`.
