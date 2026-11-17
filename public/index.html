@@ -12,20 +12,53 @@
 <script>
 'use strict';
 const c=document.getElementById('game'),ctx=c.getContext('2d'),$=x=>document.getElementById(x);
-let W=innerWidth,H=innerHeight,dpr=1,map=null,level=0,me=null,peers=[],entities=[],items=[],online=0,connected=false,ws=null,maps=new Map(),selected=0,inv=['인포머'],testCrates=new Map(),messageTimer=0,dead=false,camX=0,camY=0,keys={},joy={x:0,y:0},last=performance.now(),serverId='';
+let frameLast=0,W=innerWidth,H=innerHeight,dpr=1,map=null,level=0,me=null,peers=[],entities=[],items=[],online=0,connected=false,ws=null,maps=new Map(),selected=0,inv=['인포머'],testCrates=new Map(),messageTimer=0,dead=false,camX=0,camY=0,keys={},joy={x:0,y:0},last=performance.now(),serverId='';
 const colors=[['#c6ad60','#786c42','#d9c887'],['#7d858b','#3b464d','#a6adb1'],['#ab6750','#4a3130','#be7966'],['#60747e','#313c43','#81959c'],['#c6c4b6','#6c6b60','#e1ddce'],['#72513b','#322725','#9c7860'],['#131b24','#090a0d','#252d34'],['#245467','#14313e','#35798c'],['#6d5641','#30271e','#8c7656'],['#34383c','#1b2226','#646a71'],['#867b48','#435332','#a99d5c'],['#656b7b','#343b4c','#8992a1'],['#424a55','#1b2534','#667689'],['#95817b','#4e4145','#b7a2a2'],['#809b77','#43664c','#a9c8a0'],['#778a94','#3f5665','#91b4c0'],['#9e8570','#504338','#bba38b'],['#53636c','#263b45','#738b98'],['#b6a18b','#68564b','#dbc4ad'],['#80674d','#392f2b','#a18466'],['#5c8795','#2f515a','#80a7b3']];
 const zoneNames={safe:'안전구역',caution:'주의구역',danger:'위험구역',dead:'데드존'};
-function resize(){dpr=Math.min(2,devicePixelRatio||1);W=innerWidth;H=innerHeight;c.width=Math.ceil(W*dpr);c.height=Math.ceil(H*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);}addEventListener('resize',resize);resize();
+function resize(){dpr=Math.min(matchMedia('(pointer:coarse)').matches?1.25:1.5,devicePixelRatio||1);W=innerWidth;H=innerHeight;c.width=Math.ceil(W*dpr);c.height=Math.ceil(H*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);}addEventListener('resize',resize);resize();
 function notify(s){$('notice').textContent=s;$('notice').style.opacity=1;clearTimeout(messageTimer);messageTimer=setTimeout(()=>$('notice').style.opacity=0,2600)}
-function loadMap(n){if(maps.has(n)){map=maps.get(n);return Promise.resolve()}return fetch('/maps/'+n+'.json').then(r=>{if(!r.ok)throw Error('맵 로드 실패');return r.json()}).then(m=>{m.floorSet=new Set(m.floors);maps.set(n,m);if(level===n)map=m})}
+function loadMap(n){if(maps.has(n)){map=maps.get(n);return Promise.resolve()}return fetch('/maps/'+n+'.json').then(r=>{if(!r.ok)throw Error('맵 로드 실패');return r.json()}).then(m=>{m.floorSet=new Set(m.floors);m.chunkCache=new Map();m.lights=m.objects.filter(o=>o.kind==='light');m.interactables=m.objects.filter(o=>o.kind==='crate'||o.kind==='trigger');maps.set(n,m);if(level===n)map=m})}
 function makeColors(){return colors[level]||colors[0]}
 function floor(x,y){return map?.floorSet.has(`${Math.floor(x/32)},${Math.floor(y/32)}`)}
 function getZone(x,y){let z=map?.defaultZone||'caution';for(const a of map?.zones||[])if(x>=a.x&&y>=a.y&&x<a.x+a.w&&y<a.y+a.h)z=a.kind;return z}
-function draw(){ctx.clearRect(0,0,W,H);ctx.fillStyle='#050607';ctx.fillRect(0,0,W,H);if(!map||!me){requestAnimationFrame(draw);return}let pal=makeColors(),sx=camX-W/2,sy=camY-H/2,scale=1.25;ctx.save();ctx.translate(W/2,H/2);ctx.scale(scale,scale);ctx.translate(-camX,-camY);
+
+const TILE_CHUNK=12,TILE_SIZE=32,TILE_CACHE_LIMIT=96;
+function renderTerrainChunk(m,cx,cy,pal){
+ const key=cx+','+cy;let bitmap=m.chunkCache.get(key);
+ if(bitmap){m.chunkCache.delete(key);m.chunkCache.set(key,bitmap);return bitmap;}
+ const px=TILE_CHUNK*TILE_SIZE,off=document.createElement('canvas');off.width=px*1.5;off.height=px*1.5;
+ const t=off.getContext('2d',{alpha:false});t.scale(1.5,1.5);t.fillStyle='#050607';t.fillRect(0,0,px,px);
+ const baseX=cx*TILE_CHUNK,baseY=cy*TILE_CHUNK;
+ for(let y=baseY;y<Math.min(m.height,baseY+TILE_CHUNK);y++)for(let x=baseX;x<Math.min(m.width,baseX+TILE_CHUNK);x++){
+   if(!m.floorSet.has(x+','+y))continue;
+   const wx=(x-baseX)*TILE_SIZE,wy=(y-baseY)*TILE_SIZE;
+   const rand=((x*73856093^y*19349663^level*83492791)>>>0)%101;
+   t.fillStyle=rand%7===0?pal[2]:pal[0];t.fillRect(wx,wy,32,32);
+   t.strokeStyle=level===0?'#75694144':'#ffffff08';t.lineWidth=.7;t.strokeRect(wx+.5,wy+.5,31,31);
+   if(rand<18){t.fillStyle='#00000020';t.fillRect(wx+4+rand%12,wy+7,2+rand%3,11);}
+   for(const [dx,dy] of [[0,-1],[1,0],[0,1],[-1,0]])if(!m.floorSet.has((x+dx)+','+(y+dy))){
+     t.fillStyle=pal[1];t.fillRect(wx+(dx===1?28:0),wy+(dy===1?28:0),dx?4:32,dy?4:32);
+     t.fillStyle='#0000005a';t.fillRect(wx+(dx===1?27:0),wy+(dy===1?27:0),dx?2:32,dy?2:32);
+   }
+ }
+ m.chunkCache.set(key,off);
+ if(m.chunkCache.size>TILE_CACHE_LIMIT)m.chunkCache.delete(m.chunkCache.keys().next().value);
+ return off;
+}
+function drawCachedTerrain(m,pal,minX,maxX,minY,maxY){
+ const fromCX=Math.floor(minX/TILE_CHUNK),toCX=Math.floor(maxX/TILE_CHUNK);
+ const fromCY=Math.floor(minY/TILE_CHUNK),toCY=Math.floor(maxY/TILE_CHUNK);
+ for(let cy=fromCY;cy<=toCY;cy++)for(let cx=fromCX;cx<=toCX;cx++){
+   const off=renderTerrainChunk(m,cx,cy,pal);
+   ctx.drawImage(off,cx*TILE_CHUNK*TILE_SIZE,cy*TILE_CHUNK*TILE_SIZE,TILE_CHUNK*TILE_SIZE,TILE_CHUNK*TILE_SIZE);
+ }
+}
+
+function draw(now=0){const interval=matchMedia('(pointer:coarse)').matches?1000/45:1000/60;if(document.hidden||now-frameLast<interval){requestAnimationFrame(draw);return;}frameLast=now;ctx.fillStyle='#050607';ctx.fillRect(0,0,W,H);if(!map||!me){requestAnimationFrame(draw);return}if(level===6){ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);requestAnimationFrame(draw);return;}let pal=makeColors(),sx=camX-W/2,sy=camY-H/2,scale=1.25;camX+=(me.x-camX)*.14;camY+=(me.y-camY)*.14;ctx.save();ctx.translate(W/2,H/2);ctx.scale(scale,scale);ctx.translate(-camX,-camY);
  const pad=60,minX=Math.max(0,Math.floor((camX-W/2/scale-pad)/32)),maxX=Math.min(map.width-1,Math.ceil((camX+W/2/scale+pad)/32)),minY=Math.max(0,Math.floor((camY-H/2/scale-pad)/32)),maxY=Math.min(map.height-1,Math.ceil((camY+H/2/scale+pad)/32));
- for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++){let wx=x*32,wy=y*32;if(!floor(wx+16,wy+16))continue;const rand=((x*73856093^y*19349663^level*83492791)>>>0)%101;ctx.fillStyle=rand%7===0?pal[2]:pal[0];ctx.fillRect(wx,wy,32,32);ctx.strokeStyle=level===0?'#75694144':'#ffffff08';ctx.lineWidth=.7;ctx.strokeRect(wx+.5,wy+.5,31,31);if(rand<18){ctx.fillStyle='#00000020';ctx.fillRect(wx+4+rand%12,wy+7,2+rand%3,11)}for(const [dx,dy] of [[0,-1],[1,0],[0,1],[-1,0]])if(!floor(wx+16+dx*32,wy+16+dy*32)){ctx.fillStyle=pal[1];ctx.fillRect(wx+(dx===1?28:0),wy+(dy===1?28:0),dx?4:32,dy?4:32);ctx.fillStyle='#0000005a';ctx.fillRect(wx+(dx===1?27:0),wy+(dy===1?27:0),dx?2:32,dy?2:32);}}
- if(level!==6){for(const l of map.objects.filter(o=>o.kind==='light')){let g=ctx.createRadialGradient(l.x,l.y,3,l.x,l.y,l.radius||170);g.addColorStop(0,'#fff1ad28');g.addColorStop(1,'#fff1ad00');ctx.fillStyle=g;ctx.beginPath();ctx.arc(l.x,l.y,l.radius||170,0,Math.PI*2);ctx.fill()}}
- for(const o of map.objects){if(o.kind==='crate'){let until=testCrates.get(o.id)||0;ctx.globalAlpha=until>Date.now()?.25:1;ctx.fillStyle='#785a37';ctx.fillRect(o.x-12,o.y-12,24,24);ctx.fillStyle='#e5bf6a';ctx.fillRect(o.x-10,o.y-3,20,5);ctx.strokeStyle='#1e1710';ctx.strokeRect(o.x-12,o.y-12,24,24);ctx.globalAlpha=1}else if(o.kind==='trigger'){ctx.fillStyle='#8dbdce18';ctx.fillRect(o.x,o.y,o.w||32,o.h||32);ctx.strokeStyle='#a7e0fb8c';ctx.strokeRect(o.x+2,o.y+2,(o.w||32)-4,(o.h||32)-4)}}
+ drawCachedTerrain(map,pal,minX,maxX,minY,maxY);
+ if(level!==6){for(const l of map.lights){let g=ctx.createRadialGradient(l.x,l.y,3,l.x,l.y,l.radius||170);g.addColorStop(0,'#fff1ad28');g.addColorStop(1,'#fff1ad00');ctx.fillStyle=g;ctx.beginPath();ctx.arc(l.x,l.y,l.radius||170,0,Math.PI*2);ctx.fill()}}
+ for(const o of map.interactables){if(o.x<(minX-8)*32||o.x>(maxX+8)*32||o.y<(minY-8)*32||o.y>(maxY+8)*32)continue;if(o.kind==='crate'){let until=testCrates.get(o.id)||0;ctx.globalAlpha=until>Date.now()?.25:1;ctx.fillStyle='#785a37';ctx.fillRect(o.x-12,o.y-12,24,24);ctx.fillStyle='#e5bf6a';ctx.fillRect(o.x-10,o.y-3,20,5);ctx.strokeStyle='#1e1710';ctx.strokeRect(o.x-12,o.y-12,24,24);ctx.globalAlpha=1}else if(o.kind==='trigger'){ctx.fillStyle='#8dbdce18';ctx.fillRect(o.x,o.y,o.w||32,o.h||32);ctx.strokeStyle='#a7e0fb8c';ctx.strokeRect(o.x+2,o.y+2,(o.w||32)-4,(o.h||32)-4)}}
  for(const item of items){ctx.fillStyle=item.light?'#a9f6ac':'#f5c278';ctx.beginPath();ctx.arc(item.x,item.y,6,0,Math.PI*2);ctx.fill();if(item.light&&level!==6){let g=ctx.createRadialGradient(item.x,item.y,4,item.x,item.y,100);g.addColorStop(0,'#9cff774e');g.addColorStop(1,'#9cff7700');ctx.fillStyle=g;ctx.beginPath();ctx.arc(item.x,item.y,100,0,Math.PI*2);ctx.fill()}}
  for(const p of peers){ctx.fillStyle='#0008';ctx.beginPath();ctx.ellipse(p.x+1,p.y+8,13,5,0,0,7);ctx.fill();ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,10,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff8';ctx.stroke();ctx.font='12px system-ui';ctx.textAlign='center';ctx.fillStyle='#f3f6ef';ctx.fillText(p.nick,p.x,p.y-16)}
  ctx.fillStyle=me.color||'#9acdd4';ctx.shadowColor=me.color;ctx.shadowBlur=8;ctx.beginPath();ctx.arc(me.x,me.y,10,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();ctx.font='12px system-ui';ctx.textAlign='center';ctx.fillStyle='#f1f9f5';ctx.fillText(me.nick||'나',me.x,me.y-16);
@@ -45,12 +78,12 @@ function updateHud(){if(!me)return;$('levelText').textContent=`LEVEL ${level} ·
 function send(obj){if(ws?.readyState===1)ws.send(JSON.stringify(obj))}
 function connect(){let nickname=$('nick').value.trim().slice(0,16);if(!nickname)nickname='방랑자'+Math.floor(Math.random()*1000);let loc=location;ws=new WebSocket((loc.protocol==='https:'?'wss':'ws')+'://'+loc.host+'/api/ws');$('connectmsg').textContent='서버 연결 중…';ws.onopen=()=>send({type:'join',nick:nickname,color:$('color').value});ws.onmessage=async ev=>{let m;try{m=JSON.parse(ev.data)}catch{return}if(m.type==='welcome'){serverId=m.id;inv=m.items||inv;connected=true;$('login').style.display='none';$('connection').textContent='● 온라인 접속 중';notify('백룸에 들어왔습니다.');drawInventory()}
  if(m.type==='level'){level=m.level;map=null;peers=[];entities=[];items=[];await loadMap(level);if(me){me.x=m.x;me.y=m.y}camX=m.x;camY=m.y;testCrates.clear();updateHud();notify('Level '+level+' 진입'+(m.trigger?' · '+m.trigger:''))}
- if(m.type==='state'){me=m.you;level=me.level;peers=m.peers||[];entities=m.entities||[];items=m.drops||[];online=m.online||0;camX+=(me.x-camX)*.24;camY+=(me.y-camY)*.24;updateHud()}
+ if(m.type==='state'){me=m.you;level=me.level;peers=m.peers||[];entities=m.entities||[];items=m.drops||[];online=m.online||0;updateHud()}
  if(m.type==='chat'){const row=document.createElement('div');row.textContent=m.from+': '+m.text;$('chatlog').appendChild(row);if($('chatlog').children.length>70)$('chatlog').firstChild.remove();$('chatlog').scrollTop=$('chatlog').scrollHeight}
  if(m.type==='inventory'){inv=m.items;drawInventory()}if(m.type==='notice')notify(m.text);if(m.type==='crate')testCrates.set(m.id,m.until);if(m.type==='full'){alert(m.text||'인원이 가득 찼습니다');ws.close()}if(m.type==='dead'){dead=true;$('death').style.display='grid';$('reason').textContent=m.reason}}
  ws.onclose=()=>{connected=false;$('connection').textContent='● 서버 연결 끊김';if(!dead)notify('서버 연결이 끊겼습니다. 새로고침해 재접속하세요.');$('enter').disabled=false};ws.onerror=()=>{$('connectmsg').textContent='서버 연결에 실패했습니다. 다시 시도해 주세요.';notify('서버 연결 실패')};}
 function drawInventory(){$('slots').replaceChildren();for(let i=0;i<12;i++){let b=document.createElement('button');b.textContent=(i+1)+'. '+(inv[i]||'—');if(selected===i)b.classList.add('selected');b.onclick=()=>{selected=i;drawInventory()};$('slots').appendChild(b)}}
-function nearestObject(){if(!map||!me)return null;let vals=[...map.objects.filter(o=>o.kind==='crate'||o.kind==='trigger'),...items.map(o=>({...o,kind:'drop'}))];let hits=vals.filter(o=>Math.hypot((o.x+(o.w||0)/2)-me.x,(o.y+(o.h||0)/2)-me.y)<68);hits.sort((a,b)=>Math.hypot(a.x-me.x,a.y-me.y)-Math.hypot(b.x-me.x,b.y-me.y));return hits[0]}
+function nearestObject(){if(!map||!me)return null;let nearest=null,best=68*68;for(const o of map.interactables){const x=o.x+(o.w||0)/2-me.x,y=o.y+(o.h||0)/2-me.y,d=x*x+y*y;if(d<best){best=d;nearest=o}}for(const o of items){const x=o.x-me.x,y=o.y-me.y,d=x*x+y*y;if(d<best){best=d;nearest={...o,kind:'drop'}}}return nearest}
 function act(){let o=nearestObject();if(o){if(o.kind==='drop'){send({type:'pickup',id:o.id});notify('아이템을 획득했습니다.')}else send({type:'interact',id:o.id});}else notify('주변에 상호작용할 대상이 없습니다.')}
 function jump(){send({type:'jump'});notify('점프')}
 $('enter').onclick=connect;$('nick').addEventListener('keydown',e=>{if(e.key==='Enter')connect()});$('closeinv').onclick=()=>$('inventory').style.display='none';$('mobinv').onclick=()=>$('inventory').style.display=$('inventory').style.display==='block'?'none':'block';$('mobact').onclick=act;$('mobjump').onclick=jump;
@@ -58,6 +91,6 @@ $('use').onclick=()=>{if(selected===0){notify('인포머: 현재 Level '+level+'
 $('chatinput').addEventListener('keydown',e=>{if(e.key==='Enter'){send({type:'chat',text:$('chatinput').value});$('chatinput').value='';$('chatinput').blur()}});
 addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='i'){e.preventDefault();$('inventory').style.display=$('inventory').style.display==='block'?'none':'block';drawInventory()}if(e.key.toLowerCase()==='e')act();if(e.code==='Space'){e.preventDefault();jump()}if(e.key==='Enter'&&level!==0){$('chatinput').focus()}if(e.key==='Escape'){$('inventory').style.display='none';$('chatinput').blur()}});addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false});
 const joyEl=$('joystick'),stick=$('stick');function handleJoy(e){let r=joyEl.getBoundingClientRect(),dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2),d=Math.hypot(dx,dy),a=Math.min(d/40,1);joy.x=dx/(d||1)*a;joy.y=dy/(d||1)*a;stick.style.transform=`translate(${joy.x*37}px,${joy.y*37}px)`}joyEl.addEventListener('pointerdown',e=>{joyEl.setPointerCapture(e.pointerId);handleJoy(e)});joyEl.addEventListener('pointermove',e=>{if(e.buttons)handleJoy(e)});function joyEnd(){joy={x:0,y:0};stick.style.transform=''}joyEl.addEventListener('pointerup',joyEnd);joyEl.addEventListener('pointercancel',joyEnd);
-let lastMove=performance.now();setInterval(()=>{if(!connected||!me||dead)return;let dx=(keys['d']?1:0)-(keys['a']?1:0)+joy.x,dy=(keys['s']?1:0)-(keys['w']?1:0)+joy.y;send({type:'move',dx:Math.max(-1,Math.min(1,dx)),dy:Math.max(-1,Math.min(1,dy))});let o=nearestObject();$('tip').textContent=o?`[E] ${o.kind==='trigger'?o.label:o.kind==='crate'?'아이템 상자 열기':'아이템 줍기'}`:'WASD 이동 · E 상호작용 · I 인벤토리 · Space 점프';},50);
+let lastMove=performance.now();setInterval(()=>{if(!connected||!me||dead)return;let dx=(keys['d']?1:0)-(keys['a']?1:0)+joy.x,dy=(keys['s']?1:0)-(keys['w']?1:0)+joy.y;send({type:'move',dx:Math.max(-1,Math.min(1,dx)),dy:Math.max(-1,Math.min(1,dy))});let o=nearestObject();$('tip').textContent=o?`[E] ${o.kind==='trigger'?o.label:o.kind==='crate'?'아이템 상자 열기':'아이템 줍기'}`:'WASD 이동 · E 상호작용 · I 인벤토리 · Space 점프';},80);
 requestAnimationFrame(draw);
 </script></body></html>
