@@ -36,8 +36,8 @@ function accountKey(name){return ACCOUNT_PREFIX+name.toLowerCase()}
 function secureSame(a,b){const x=Buffer.from(a,'hex'),y=Buffer.from(b,'hex');return x.length===y.length&&crypto.timingSafeEqual(x,y)}
 async function hashPass(pass,salt){return (await scrypt(pass,salt,64)).toString('hex')}
 function emptySave(){let m=MAPS[0];return {level:0,x:m.spawn.x,y:m.spawn.y,hp:100,san:100,inv:['인포머'],dead:false}}
-function normalizedSave(o){let t=emptySave();if(!o||typeof o!=='object')return t;const level=Number(o.level);if(!Number.isInteger(level)||level<0||level>20)return t;let x=Number(o.x),y=Number(o.y);if(!Number.isFinite(x)||!Number.isFinite(y)||!floor(level,x,y)){x=MAPS[level].spawn.x;y=MAPS[level].spawn.y;}return {level,x,y,hp:Math.max(0,Math.min(100,Number(o.hp)||0)),san:Math.max(0,Math.min(100,Number(o.san)||0)),inv:Array.isArray(o.inv)?['인포머',...o.inv.filter(v=>typeof v==='string'&&v!=='인포머').slice(0,11)]:['인포머'],dead:!!o.dead};}
-function serialize(p){return {level:p.level,x:p.x,y:p.y,hp:p.hp,san:p.san,inv:p.inv,dead:p.dead,savedAt:Date.now()}}
+function normalizedSave(o){let t=emptySave();if(!o||typeof o!=='object')return t;const level=Number(o.level);if(!Number.isInteger(level)||level<0||level>20)return t;let x=Number(o.x),y=Number(o.y);if(!Number.isFinite(x)||!Number.isFinite(y)||!floor(level,x,y)){x=MAPS[level].spawn.x;y=MAPS[level].spawn.y;}return {level,x,y,hp:Math.max(0,Math.min(100,Number(o.hp)||0)),san:Math.max(0,Math.min(100,Number(o.san)||0)),inv:Array.isArray(o.inv)?['인포머',...o.inv.filter(v=>typeof v==='string'&&v!=='인포머').slice(0,11)]:['인포머'],dead:!!o.dead,nick:typeof o.nick==='string'?label(o.nick):'',color:/^#[0-9a-fA-F]{6}$/.test(o.color||'')?o.color:'#94c8da'};}
+function serialize(p){return {level:p.level,x:p.x,y:p.y,hp:p.hp,san:p.san,inv:p.inv,dead:p.dead,nick:p.nick,color:p.color,savedAt:Date.now()}}
 async function persist(p){if(!redisReady||!p.account)return;try{await redis.set(SAVE_PREFIX+p.account,JSON.stringify(serialize(p)))}catch(e){console.error('save failure',e.message)}}
 async function authenticate(a){
  if(!redisReady)throw Error('저장 서버 준비 중입니다. 잠시 후 다시 시도해 주세요.');
@@ -122,7 +122,7 @@ wss.on('connection',ws=>{
     const auth=await authenticate(a),old=await redis.get(SAVE_PREFIX+auth.name),saved=old?normalizedSave(JSON.parse(old)):emptySave();
     const uid=id();if(!await reserveSeat(uid))throw Error('서버 정원 40명입니다.');
     clearTimeout(timeout);
-    p={id:uid,account:auth.name,ws,nick:label(a.nick||auth.name),color:/^#[0-9a-fA-F]{6}$/.test(a.color)?a.color:'#94c8da',
+    p={id:uid,account:auth.name,ws,nick:label(a.nick||saved.nick||auth.name),color:/^#[0-9a-fA-F]{6}$/.test(a.color)?a.color:(saved.color||'#94c8da'),
       x:saved.x,y:saved.y,level:saved.level,hp:saved.hp,san:saved.san,inv:saved.inv,
       lastMove:Date.now(),lastChat:0,deadz:0,dead:false,saveBusy:false};
     clients.set(uid,p);
