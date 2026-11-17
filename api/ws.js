@@ -93,6 +93,89 @@ function snapshot(){
   send(p.ws,{type:'state',you:sprite(p),peers,online,zone:zone(p.level,p.x,p.y),drops:drops.get(roomKey)||[],entities:entities.get(roomKey)||[]});
  }
 }
+
+const ENTITY_TYPES={
+ smiler:{speed:65,damage:11,range:25,aggro:360},
+ hound:{speed:104,damage:15,range:27,aggro:460},
+ faceling:{speed:52,damage:8,range:27,aggro:270},
+ skinstealer:{speed:79,damage:20,range:29,aggro:430}
+};
+function entityPool(level){
+ if(level===6)return ['smiler','hound'];
+ if(level===1)return ['faceling','hound'];
+ if(level===2||level===3)return ['hound','smiler'];
+ if(level===14)return ['faceling','skinstealer','smiler'];
+ return ['hound','smiler','faceling','skinstealer'];
+}
+function spawnEntity(p,roomKey,list){
+ const m=MAPS[p.level],danger=zone(p.level,p.x,p.y)==='danger';
+ const pool=entityPool(p.level);
+ for(let i=0;i<28;i++){
+  const angle=Math.random()*Math.PI*2,dist=150+Math.random()*310;
+  const x=p.x+Math.cos(angle)*dist,y=p.y+Math.sin(angle)*dist;
+  if(x<16||y<16||x>m.width*32-16||y>m.height*32-16||!floor(p.level,x,y))continue;
+  const region=zone(p.level,x,y);
+  if(region==='safe'||region==='dead'||(region==='caution'&&Math.random()<(danger?.15:.35)))continue;
+  if(list.some(e=>Math.hypot(e.x-x,e.y-y)<110))continue;
+  const type=pool[Math.floor(Math.random()*pool.length)];
+  list.push({id:id(),type,x,y,level:p.level,hp:100,heading:angle,lastHit:0,roamAt:0});
+  return true;
+ }
+ return false;
+}
+function tickEntities(){
+ const active=new Map();
+ for(const p of clients.values()){
+  if(p.dead)continue;
+  const z=zone(p.level,p.x,p.y);
+  if(z==='safe'||z==='dead')continue;
+  const key=room(p),arr=active.get(key)||[];
+  arr.push(p);active.set(key,arr);
+ }
+ const now=Date.now();
+ for(const [key,players] of active){
+  const level=players[0].level;
+  let list=entities.get(key);
+  if(!list){list=[];entities.set(key,list);}
+  const danger=players.some(p=>zone(p.level,p.x,p.y)==='danger');
+  const limit=level===0?2:Math.min(9,players.length*(danger?3:2));
+  // First entity spawns promptly; additional entities spawn gradually.
+  const chance=level===0?.25:danger?.70:.28;
+  if(list.length<limit&&(list.length===0||Math.random()<chance))spawnEntity(players[Math.floor(Math.random()*players.length)],key,list);
+  for(const e of list){
+   const cfg=ENTITY_TYPES[e.type]||ENTITY_TYPES.hound;
+   let closest=null,closestD=Infinity;
+   for(const p of players){
+    if(zone(p.level,p.x,p.y)==='safe')continue;
+    const d=Math.hypot(e.x-p.x,e.y-p.y);
+    if(d<closestD){closestD=d;closest=p;}
+   }
+   if(closest&&closestD<cfg.aggro){
+    const dx=closest.x-e.x,dy=closest.y-e.y,d=Math.max(1,closestD);
+    e.heading=Math.atan2(dy,dx);
+    const step=Math.min(cfg.speed*.25,Math.max(0,d-14));
+    const nx=e.x+dx/d*step,ny=e.y+dy/d*step;
+    if(floor(level,nx,ny)&&zone(level,nx,ny)!=='safe'&&zone(level,nx,ny)!=='dead'){e.x=nx;e.y=ny;}
+    if(closestD<cfg.range&&now-e.lastHit>=1100){
+      e.lastHit=now;
+      closest.hp=Math.max(0,closest.hp-cfg.damage);
+      closest.san=Math.max(0,closest.san-(e.type==='smiler'?14:4));
+      if(closest.hp<=0)dead(closest,e.type+'에게 공격당했습니다.');
+    }
+   }else{
+    if(now>e.roamAt){e.heading=Math.random()*Math.PI*2;e.roamAt=now+1400+Math.random()*2200;}
+    const nx=e.x+Math.cos(e.heading)*cfg.speed*.06,ny=e.y+Math.sin(e.heading)*cfg.speed*.06;
+    if(floor(level,nx,ny)&&zone(level,nx,ny)!=='safe'&&zone(level,nx,ny)!=='dead'){e.x=nx;e.y=ny;}
+   }
+  }
+  // Unreachable monsters are recycled to avoid accumulation.
+  for(let i=list.length-1;i>=0;i--){
+   if(players.every(p=>Math.hypot(p.x-list[i].x,p.y-list[i].y)>800))list.splice(i,1);
+  }
+ }
+ for(const key of entities.keys())if(!active.has(key))entities.delete(key);
+}
+
 function room(p){return p.level===0?'0:'+p.id:String(p.level)}
 function near(p,obj,r=62){return Math.hypot(p.x-(obj.x+(obj.w||0)/2),p.y-(obj.y+(obj.h||0)/2))<r;}
 function move(p,dx,dy,ms){let d=Math.hypot(dx,dy)||1,delta=Math.max(0,Math.min(0.2,ms/1000));let mx=dx/d*delta*SPEED,my=dy/d*delta*SPEED;const r=9;let X=p.x+mx,Y=p.y+my;if(floor(p.level,X-r,p.y-r)&&floor(p.level,X+r,p.y+r)&&floor(p.level,X-r,p.y+r)&&floor(p.level,X+r,p.y-r))p.x=X;if(floor(p.level,p.x-r,Y-r)&&floor(p.level,p.x+r,Y+r)&&floor(p.level,p.x-r,Y+r)&&floor(p.level,p.x+r,Y-r))p.y=Y;}
@@ -156,6 +239,7 @@ wss.on('connection',ws=>{
  ws.on('error',()=>{});
 });
 setInterval(snapshot,120);
+setInterval(tickEntities,250);
 setInterval(()=>{if(clients.size&&redisReady)publish({type:'snapshot',players:[...clients.values()].map(sprite)});},450);
 setInterval(()=>{if(!clients.size||!redisReady)return;let args=[];for(const p of clients.values())args.push(Date.now()+25000,p.id);redis.zadd('noclip:presence',...args).catch(()=>{});},10000);
 setInterval(()=>{for(const p of clients.values())persist(p);},15000);
