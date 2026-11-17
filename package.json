@@ -1,1 +1,15 @@
-{"name":"noclip-online","version":"0.1.0","type":"commonjs","scripts":{"start":"node api/server.js"},"dependencies":{"ws":"^8.18.3"},"engines":{"node":">=20"}}
+{
+  "name": "noclip-online",
+  "version": "0.1.0",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node api/server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.3",
+    "ioredis": "^5.4.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
