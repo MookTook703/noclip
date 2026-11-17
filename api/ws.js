@@ -35,7 +35,18 @@ function floor(l,x,y){return FLOORS[l].has(`${Math.floor(x/32)},${Math.floor(y/3
 function zone(l,x,y){const m=MAPS[l];let z=m.defaultZone||'caution';for(const a of m.zones||[]){if(x>=a.x&&y>=a.y&&x<a.x+a.w&&y<a.y+a.h)z=a.kind;}return z;}
 function sprite(p){return {id:p.id,nick:p.nick,color:p.color,x:Math.round(p.x),y:Math.round(p.y),level:p.level,hp:Math.ceil(p.hp),san:Math.ceil(p.san)};}
 function broadcast(l,obj,exclude,relay=true){if(l===0)return;for(const p of clients.values())if(p.level===l&&p.ws!==exclude)send(p.ws,obj);if(relay)publish({type:'relay',level:l,payload:obj});}
-function snapshot(){for(const p of clients.values()){if(p.ws.readyState!==1)continue;let peers=p.level===0?[]:[...clients.values()].filter(q=>q.level===p.level&&q!==p).map(sprite).concat(remotePeers(p.level));let roomDrops=p.level===0?(drops.get('0:'+p.id)||[]):(drops.get(String(p.level))||[]);let e=p.level===0?(entities.get('0:'+p.id)||[]):(entities.get(String(p.level))||[]);send(p.ws,{type:'state',you:sprite(p),peers,online:clients.size+[...remoteStates.values()].reduce((a,v)=>a+(Date.now()-v.at<3000?v.players.length:0),0),zone:zone(p.level,p.x,p.y),drops:roomDrops,entities:e});}}
+function snapshot(){
+ if(!clients.size)return;
+ const local=[...clients.values()],now=Date.now(),online=local.length+[...remoteStates.values()].reduce((n,r)=>n+(now-r.at<3000?r.players.length:0),0);
+ const grouped=new Map();
+ for(const q of local){if(q.level===0)continue;let a=grouped.get(q.level);if(!a){a=remotePeers(q.level);grouped.set(q.level,a);}a.push(sprite(q));}
+ for(const p of local){
+  if(p.ws.readyState!==1||p.ws.bufferedAmount>128000)continue;
+  const roomKey=room(p),all=grouped.get(p.level)||[];
+  const peers=p.level===0?[]:all.filter(q=>q.id!==p.id);
+  send(p.ws,{type:'state',you:sprite(p),peers,online,zone:zone(p.level,p.x,p.y),drops:drops.get(roomKey)||[],entities:entities.get(roomKey)||[]});
+ }
+}
 function room(p){return p.level===0?'0:'+p.id:String(p.level)}
 function near(p,obj,r=62){return Math.hypot(p.x-(obj.x+(obj.w||0)/2),p.y-(obj.y+(obj.h||0)/2))<r;}
 function move(p,dx,dy,ms){let d=Math.hypot(dx,dy)||1,delta=Math.max(0,Math.min(0.2,ms/1000));let mx=dx/d*delta*SPEED,my=dy/d*delta*SPEED;const r=9;let X=p.x+mx,Y=p.y+my;if(floor(p.level,X-r,p.y-r)&&floor(p.level,X+r,p.y+r)&&floor(p.level,X-r,p.y+r)&&floor(p.level,X+r,p.y-r))p.x=X;if(floor(p.level,p.x-r,Y-r)&&floor(p.level,p.x+r,Y+r)&&floor(p.level,p.x-r,Y+r)&&floor(p.level,p.x+r,Y-r))p.y=Y;}
@@ -66,8 +77,8 @@ wss.on('connection',ws=>{let p=null;if(clients.size>=MAX){send(ws,{type:'full',t
  ws.on('message',async data=>{if(!p){let a;try{a=JSON.parse(data.toString())}catch{return}if(a.type!=='join')return;clearTimeout(timeout);let uid=id(),m=MAPS[0];if(!await reserveSeat(uid)){send(ws,{type:'full',text:'서버 정원 40명입니다.'});ws.close();return;}p={id:uid,ws,nick:label(a.nick),color:/^#[0-9a-fA-F]{6}$/.test(a.color)?a.color:'#94c8da',x:m.spawn.x,y:m.spawn.y,level:0,hp:100,san:100,inv:['인포머'],lastMove:Date.now(),lastChat:0,deadz:0,dead:false};clients.set(uid,p);send(ws,{type:'welcome',id:uid,level:0,mapCount:21,items:p.inv});send(ws,{type:'level',level:0,x:p.x,y:p.y});return}onMessage(p,data.toString())});
  ws.on('close',()=>{clearTimeout(timeout);if(p){clients.delete(p.id);releaseSeat(p.id);broadcast(p.level,{type:'leave',id:p.id});}});ws.on('error',()=>{});
 });
-setInterval(snapshot,120);
-setInterval(()=>{if(clients.size&&redisReady)publish({type:'snapshot',players:[...clients.values()].map(sprite)});},450);
+setInterval(snapshot,200);
+setInterval(()=>{if(clients.size&&redisReady)publish({type:'snapshot',players:[...clients.values()].map(sprite)});},700);
 setInterval(()=>{if(!clients.size||!redisReady)return;let args=[];for(const p of clients.values())args.push(Date.now()+25000,p.id);redis.zadd('noclip:presence',...args).catch(()=>{});},10000);
 setInterval(()=>{let cutoff=Date.now()-120000;for(const [key,arr] of drops){drops.set(key,arr.filter(d=>!d.light||d.created>cutoff));}for(const p of clients.values()){if(p.dead)continue;const delta=1000;if(zone(p.level,p.x,p.y)==='dead'){p.deadz+=delta;if(p.deadz>=1000)dead(p,'데드존에서 사망했습니다.')}if(p.level===14){p.hp-=.5;p.san-=1.2;if(p.hp<=0)dead(p,'Level 14에서 서서히 사망했습니다.')}}},1000);
 if(require.main===module){server.listen(process.env.PORT||3000,()=>console.log('NOCLIP ONLINE listening'));}
