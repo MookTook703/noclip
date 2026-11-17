@@ -12,7 +12,7 @@
 <script>
 'use strict';
 const c=document.getElementById('game'),ctx=c.getContext('2d'),$=x=>document.getElementById(x);
-let frameLast=0,renderPeers=[],drawMe=null,W=innerWidth,H=innerHeight,dpr=1,map=null,level=0,me=null,peers=[],entities=[],items=[],online=0,connected=false,ws=null,maps=new Map(),selected=0,inv=['인포머'],testCrates=new Map(),messageTimer=0,dead=false,camX=0,camY=0,keys={},joy={x:0,y:0},last=performance.now(),serverId='',lastPositionSample=null,shownSpeed=0;
+let frameLast=0,renderPeers=[],renderEntities=[],drawMe=null,W=innerWidth,H=innerHeight,dpr=1,map=null,level=0,me=null,peers=[],entities=[],items=[],online=0,connected=false,ws=null,maps=new Map(),selected=0,inv=['인포머'],testCrates=new Map(),messageTimer=0,dead=false,camX=0,camY=0,keys={},joy={x:0,y:0},last=performance.now(),serverId='',lastPositionSample=null,shownSpeed=0;
 const colors=[['#c6ad60','#786c42','#d9c887'],['#7d858b','#3b464d','#a6adb1'],['#ab6750','#4a3130','#be7966'],['#60747e','#313c43','#81959c'],['#c6c4b6','#6c6b60','#e1ddce'],['#72513b','#322725','#9c7860'],['#131b24','#090a0d','#252d34'],['#245467','#14313e','#35798c'],['#6d5641','#30271e','#8c7656'],['#34383c','#1b2226','#646a71'],['#867b48','#435332','#a99d5c'],['#656b7b','#343b4c','#8992a1'],['#424a55','#1b2534','#667689'],['#95817b','#4e4145','#b7a2a2'],['#809b77','#43664c','#a9c8a0'],['#778a94','#3f5665','#91b4c0'],['#9e8570','#504338','#bba38b'],['#53636c','#263b45','#738b98'],['#b6a18b','#68564b','#dbc4ad'],['#80674d','#392f2b','#a18466'],['#5c8795','#2f515a','#80a7b3']];
 const zoneNames={safe:'안전구역',caution:'주의구역',danger:'위험구역',dead:'데드존'};
 function resize(){dpr=Math.min(2,devicePixelRatio||1);W=innerWidth;H=innerHeight;c.width=Math.ceil(W*dpr);c.height=Math.ceil(H*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);}addEventListener('resize',resize);resize();
@@ -54,16 +54,45 @@ function drawCachedTerrain(m,pal,minX,maxX,minY,maxY){
  }
 }
 
+
+// Entity silhouettes are intentionally different from player circles.
+function drawEntity(e){
+ const x=e.rx,y=e.ry;
+ if(e.type==='smiler'){
+  ctx.save();ctx.translate(x,y);ctx.fillStyle='#fff9b6';ctx.shadowColor='#ffe993';ctx.shadowBlur=9;
+  ctx.beginPath();ctx.ellipse(-7,-5,3,5,-.2,0,Math.PI*2);ctx.ellipse(7,-5,3,5,.2,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='#ffe8a1';ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(0,-2,12,.14,Math.PI-.14);ctx.stroke();ctx.restore();return;
+ }
+ ctx.save();ctx.translate(x,y);ctx.rotate((e.heading||0)+Math.PI/2);
+ if(e.type==='hound'){
+  ctx.fillStyle='#442522';ctx.strokeStyle='#a46c62';ctx.lineWidth=1.5;
+  ctx.beginPath();ctx.moveTo(0,-16);ctx.lineTo(11,-5);ctx.lineTo(13,10);ctx.lineTo(5,16);ctx.lineTo(-5,16);ctx.lineTo(-13,10);ctx.lineTo(-11,-5);ctx.closePath();ctx.fill();ctx.stroke();
+  ctx.strokeStyle='#8c5a52';ctx.lineWidth=3;
+  for(const side of [-1,1]){ctx.beginPath();ctx.moveTo(side*9,4);ctx.lineTo(side*18,13);ctx.stroke();}
+  ctx.fillStyle='#ffb482';ctx.fillRect(-6,-11,4,3);ctx.fillRect(2,-11,4,3);
+ }else if(e.type==='faceling'){
+  ctx.fillStyle='#77776c';ctx.beginPath();ctx.ellipse(0,3,9,14,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#cabca8';ctx.beginPath();ctx.arc(0,-10,9,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='#8a817b';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(-7,3);ctx.lineTo(-16,14);ctx.moveTo(7,3);ctx.lineTo(16,14);ctx.stroke();
+ }else{
+  ctx.fillStyle='#48383d';ctx.beginPath();ctx.moveTo(0,-22);ctx.lineTo(12,-7);ctx.lineTo(10,16);ctx.lineTo(-10,16);ctx.lineTo(-12,-7);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#d8b0a3';ctx.beginPath();ctx.ellipse(0,-13,8,10,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#5c1826';ctx.fillRect(-5,-15,10,2);
+ }
+ ctx.restore();
+}
+
 function draw(now=0){const interval=0;if(document.hidden||now-frameLast<interval){requestAnimationFrame(draw);return;}frameLast=now;ctx.fillStyle='#050607';ctx.fillRect(0,0,W,H);if(!map||!me){requestAnimationFrame(draw);return}if(level===6){ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);requestAnimationFrame(draw);return;}let pal=makeColors(),sx=camX-W/2,sy=camY-H/2,scale=1.25;
  if(!drawMe)drawMe={x:me.x,y:me.y};
  drawMe.x+=(me.x-drawMe.x)*.25;drawMe.y+=(me.y-drawMe.y)*.25;
  camX+=(drawMe.x-camX)*.23;camY+=(drawMe.y-camY)*.23;
- for(const p of renderPeers){p.x+=(p.tx-p.x)*.22;p.y+=(p.ty-p.y)*.22;}ctx.save();ctx.translate(W/2,H/2);ctx.scale(scale,scale);ctx.translate(-camX,-camY);
+ for(const p of renderPeers){p.x+=(p.tx-p.x)*.22;p.y+=(p.ty-p.y)*.22;}for(const e of renderEntities){e.rx+=(e.x-e.rx)*.19;e.ry+=(e.y-e.ry)*.19;}ctx.save();ctx.translate(W/2,H/2);ctx.scale(scale,scale);ctx.translate(-camX,-camY);
  const pad=60,minX=Math.max(0,Math.floor((camX-W/2/scale-pad)/32)),maxX=Math.min(map.width-1,Math.ceil((camX+W/2/scale+pad)/32)),minY=Math.max(0,Math.floor((camY-H/2/scale-pad)/32)),maxY=Math.min(map.height-1,Math.ceil((camY+H/2/scale+pad)/32));
  drawCachedTerrain(map,pal,minX,maxX,minY,maxY);
  if(level!==6){for(const l of map.lights){let g=ctx.createRadialGradient(l.x,l.y,3,l.x,l.y,l.radius||170);g.addColorStop(0,'#fff1ad28');g.addColorStop(1,'#fff1ad00');ctx.fillStyle=g;ctx.beginPath();ctx.arc(l.x,l.y,l.radius||170,0,Math.PI*2);ctx.fill()}}
  for(const o of map.interactables){if(o.x<(minX-8)*32||o.x>(maxX+8)*32||o.y<(minY-8)*32||o.y>(maxY+8)*32)continue;if(o.kind==='crate'){let until=testCrates.get(o.id)||0;ctx.globalAlpha=until>Date.now()?.25:1;ctx.fillStyle='#785a37';ctx.fillRect(o.x-12,o.y-12,24,24);ctx.fillStyle='#e5bf6a';ctx.fillRect(o.x-10,o.y-3,20,5);ctx.strokeStyle='#1e1710';ctx.strokeRect(o.x-12,o.y-12,24,24);ctx.globalAlpha=1}}
  for(const item of items){ctx.fillStyle=item.light?'#a9f6ac':'#f5c278';ctx.beginPath();ctx.arc(item.x,item.y,6,0,Math.PI*2);ctx.fill();if(item.light&&level!==6){let g=ctx.createRadialGradient(item.x,item.y,4,item.x,item.y,100);g.addColorStop(0,'#9cff774e');g.addColorStop(1,'#9cff7700');ctx.fillStyle=g;ctx.beginPath();ctx.arc(item.x,item.y,100,0,Math.PI*2);ctx.fill()}}
+ for(const e of renderEntities){if(Math.abs(e.rx-camX)>W/1.8||Math.abs(e.ry-camY)>H/1.8)continue;drawEntity(e);}
  for(const p of renderPeers){ctx.fillStyle='#0008';ctx.beginPath();ctx.ellipse(p.x+1,p.y+8,13,5,0,0,7);ctx.fill();ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,10,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff8';ctx.stroke();ctx.font='12px system-ui';ctx.textAlign='center';ctx.fillStyle='#f3f6ef';ctx.fillText(p.nick,p.x,p.y-16)}
  ctx.fillStyle=me.color||'#9acdd4';ctx.shadowColor=me.color;ctx.shadowBlur=8;ctx.beginPath();ctx.arc(drawMe.x,drawMe.y,10,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();ctx.font='12px system-ui';ctx.textAlign='center';ctx.fillStyle='#f1f9f5';ctx.fillText(me.nick||'나',drawMe.x,drawMe.y-16);
  ctx.restore();
@@ -85,8 +114,11 @@ ws?.close();ws=new WebSocket((loc.protocol==='https:'?'wss':'ws')+'://'+loc.host
 $('enter').disabled=true;$('register').disabled=true;$('connectmsg').textContent='서버 연결 중…';
 ws.onopen=()=>send({type:authMode,nick:nickname,username:$('username').value.trim(),password:$('password').value,color:$('color').value,token:localStorage.getItem('noclip_session')||''});ws.onmessage=async ev=>{let m;try{m=JSON.parse(ev.data)}catch{return}if(m.type==='welcome'){serverId=m.id;inv=m.items||inv;connected=true;localStorage.setItem('noclip_session',m.token);$('password').value='';$('login').style.display='none';$('connection').textContent='● 온라인 접속 중';notify('백룸에 들어왔습니다.');drawInventory()}
  if(m.type==='auth_error'){$('connectmsg').textContent=m.text;$('enter').disabled=false;$('register').disabled=false;if(authMode==='session')localStorage.removeItem('noclip_session');notify(m.text);ws.close();return;}
- if(m.type==='level'){level=m.level;map=null;drawMe=null;shownSpeed=0;lastPositionSample=null;peers=[];renderPeers=[];entities=[];items=[];await loadMap(level);if(me){me.x=m.x;me.y=m.y}camX=m.x;camY=m.y;testCrates.clear();updateHud();notify('Level '+level+' 진입'+(m.trigger?' · '+m.trigger:''))}
- if(m.type==='state'){const tm=performance.now();if(lastPositionSample&&lastPositionSample.level===m.you.level){let dt=(tm-lastPositionSample.time)/1000;let meters=Math.hypot(m.you.x-lastPositionSample.x,m.you.y-lastPositionSample.y)/32;let speed=dt>0?Math.min(12,meters/dt):0;shownSpeed=speed<0.08?0:speed;}else shownSpeed=0;lastPositionSample={x:m.you.x,y:m.you.y,time:tm,level:m.you.level};me=m.you;level=me.level;peers=m.peers||[];const targets=new Map(peers.map(p=>[p.id,p]));renderPeers=peers.map(p=>{let old=renderPeers.find(q=>q.id===p.id);return old?{...p,x:old.x,y:old.y,tx:p.x,ty:p.y}:{...p,tx:p.x,ty:p.y}});entities=m.entities||[];items=m.drops||[];online=m.online||0;updateHud()}
+ if(m.type==='level'){level=m.level;map=null;drawMe=null;shownSpeed=0;lastPositionSample=null;peers=[];renderPeers=[];entities=[];renderEntities=[];items=[];await loadMap(level);if(me){me.x=m.x;me.y=m.y}camX=m.x;camY=m.y;testCrates.clear();updateHud();notify('Level '+level+' 진입'+(m.trigger?' · '+m.trigger:''))}
+ if(m.type==='state'){const tm=performance.now();if(lastPositionSample&&lastPositionSample.level===m.you.level){let dt=(tm-lastPositionSample.time)/1000;let meters=Math.hypot(m.you.x-lastPositionSample.x,m.you.y-lastPositionSample.y)/32;let speed=dt>0?Math.min(12,meters/dt):0;shownSpeed=speed<0.08?0:speed;}else shownSpeed=0;lastPositionSample={x:m.you.x,y:m.you.y,time:tm,level:m.you.level};me=m.you;level=me.level;peers=m.peers||[];const targets=new Map(peers.map(p=>[p.id,p]));renderPeers=peers.map(p=>{let old=renderPeers.find(q=>q.id===p.id);return old?{...p,x:old.x,y:old.y,tx:p.x,ty:p.y}:{...p,tx:p.x,ty:p.y}});entities=m.entities||[];
+ const previousEntities=new Map(renderEntities.map(e=>[e.id,e]));
+ renderEntities=entities.map(e=>{const old=previousEntities.get(e.id);return {...e,rx:old?.rx??e.x,ry:old?.ry??e.y}});
+ items=m.drops||[];online=m.online||0;updateHud()}
  if(m.type==='chat'){const row=document.createElement('div');row.textContent=m.from+': '+m.text;$('chatlog').appendChild(row);if($('chatlog').children.length>70)$('chatlog').firstChild.remove();$('chatlog').scrollTop=$('chatlog').scrollHeight}
  if(m.type==='inventory'){inv=m.items;drawInventory()}if(m.type==='notice')notify(m.text);if(m.type==='crate')testCrates.set(m.id,m.until);if(m.type==='full'){alert(m.text||'인원이 가득 찼습니다');ws.close()}if(m.type==='dead'){dead=true;$('death').style.display='grid';$('reason').textContent=m.reason}}
  ws.onclose=()=>{connected=false;$('register').disabled=false;$('connection').textContent='● 서버 연결 끊김';if(!dead)notify('서버 연결이 끊겼습니다. 새로고침해 재접속하세요.');$('enter').disabled=false};ws.onerror=()=>{$('connectmsg').textContent='서버 연결에 실패했습니다. 다시 시도해 주세요.';notify('서버 연결 실패')};}
