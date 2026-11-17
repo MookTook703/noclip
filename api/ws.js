@@ -14,9 +14,15 @@ if(process.env.REDIS_URL){
  const Redis=require('ioredis');
  redis=new Redis(process.env.REDIS_URL,{lazyConnect:true,maxRetriesPerRequest:1,connectTimeout:6000});
  sub=new Redis(process.env.REDIS_URL,{lazyConnect:true,maxRetriesPerRequest:null,connectTimeout:6000});
+ redis.on('ready',()=>{redisReady=true;console.log('Redis commands ready')});
+ redis.on('close',()=>{redisReady=false;});
  redis.on('error',e=>console.error('redis',e.message));
  sub.on('error',e=>console.error('redis subscribe',e.message));
- Promise.all([redis.connect(),sub.connect()]).then(async()=>{await sub.subscribe('noclip:live');redisReady=true;}).catch(e=>console.error('Redis connect',e.message));
+ // Login and saves depend only on the command connection.
+ // Subscriber initialization must never block account login.
+ redis.connect().catch(e=>console.error('Redis commands connect',e.message));
+ sub.on('ready',()=>{sub.subscribe('noclip:live').catch(e=>console.error('Redis subscribe',e.message));});
+ sub.connect().catch(e=>console.error('Redis subscriber connect',e.message));
  sub.on('message',(_,raw)=>{let msg;try{msg=JSON.parse(raw)}catch{return}if(msg.instance===INSTANCE)return;
  if(msg.type==='snapshot')remoteStates.set(msg.instance,{at:Date.now(),players:msg.players||[]});
  if(msg.type==='relay')broadcast(msg.level,msg.payload,null,false);
@@ -25,7 +31,7 @@ if(process.env.REDIS_URL){
 }
 function publish(m){if(redisReady)redis.publish('noclip:live',JSON.stringify({...m,instance:INSTANCE})).catch(()=>{});}
 const reserveScript="redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',ARGV[1]);if redis.call('ZCARD',KEYS[1])>=tonumber(ARGV[3]) then return 0 end;redis.call('ZADD',KEYS[1],ARGV[2],ARGV[4]);redis.call('EXPIRE',KEYS[1],60);return 1";
-async function reserveSeat(uid){if(!redisReady)return clients.size<MAX;try{return Number(await redis.eval(reserveScript,1,'noclip:presence',Date.now(),Date.now()+25000,MAX,uid))===1}catch(e){console.error('reserve seat',e.message);return clients.size<MAX}}
+async function reserveSeat(uid){if(!redisReady)return false;try{return Number(await redis.eval(reserveScript,1,'noclip:presence',Date.now(),Date.now()+25000,MAX,uid))===1}catch(e){console.error('reserve seat',e.message);return clients.size<MAX}}
 function releaseSeat(uid){if(redisReady)redis.zrem('noclip:presence',uid).catch(()=>{});}
 function remotePeers(l){if(l===0)return[];let now=Date.now(),out=[];for(const [id,r] of remoteStates){if(now-r.at>3000){remoteStates.delete(id);continue}out.push(...r.players.filter(p=>p.level===l))}return out;}
 
@@ -40,7 +46,11 @@ function normalizedSave(o){let t=emptySave();if(!o||typeof o!=='object')return t
 function serialize(p){return {level:p.level,x:p.x,y:p.y,hp:p.hp,san:p.san,inv:p.inv,dead:p.dead,nick:p.nick,color:p.color,savedAt:Date.now()}}
 async function persist(p){if(!redisReady||!p.account)return;try{await redis.set(SAVE_PREFIX+p.account,JSON.stringify(serialize(p)))}catch(e){console.error('save failure',e.message)}}
 async function authenticate(a){
- if(!redisReady)throw Error('저장 서버 준비 중입니다. 잠시 후 다시 시도해 주세요.');
+ if(!redis)throw Error('Redis 연결 설정이 없습니다.');
+ // Wait for the command connection itself instead of the independent pub/sub subscriber.
+ try {
+   await Promise.race([redis.ping(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')),8500))]);
+ }catch(e){throw Error('저장 서버 연결에 실패했습니다. 다시 시도해 주세요.');}
  if(a.type==='session'){
    let token=String(a.token||'');if(!/^[a-f0-9]{64}$/.test(token))throw Error('로그인 정보가 만료됐습니다.');
    let name=await redis.get(SESSION_PREFIX+token);if(!name)throw Error('자동 로그인 기간이 끝났습니다.');
