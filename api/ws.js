@@ -220,8 +220,8 @@ function performEvent(p){
  if(p.dead||p.downed)return;
  const opts=LEVEL_EVENTS[p.level]||LEVEL_EVENTS[0],selected=opts[Math.floor(Math.random()*opts.length)];
  const [title,description,kind]=selected;
- if(kind==='hazard'){p.hp=Math.max(1,p.hp-(5+Math.round(Math.random()*11)));p.san=Math.max(0,p.san-5);}
- if(kind==='echo'||kind==='hallucination'){p.san=Math.max(0,p.san-(kind==='hallucination'?10:4));}
+ if(kind==='hazard'&&LEVEL_DIFFICULTY[p.level].grade!==0){p.hp=Math.max(1,p.hp-(5+Math.round(Math.random()*11)));p.san=Math.max(0,p.san-5);}
+ if((kind==='echo'||kind==='hallucination')&&LEVEL_DIFFICULTY[p.level].grade!==0){p.san=Math.max(0,p.san-(kind==='hallucination'?10:4));}
  if(kind==='slow'||kind==='dark'||kind==='flicker'){p.eventEffect={kind,until:Date.now()+8000};}
  if(kind==='ambush'&&LEVEL_DIFFICULTY[p.level].cap>0&&zone(p.level,p.x,p.y)!=='safe'){
   const key=room(p),arr=entities.get(key)||[];if(arr.length<10){spawnEntity(p,key,arr);entities.set(key,arr);}
@@ -238,9 +238,17 @@ function tickWorld(){
   if(p.dead)continue;
   if(p.downed){if(now>=p.downedUntil)dead(p,'동료가 구조하기 전에 의식을 잃었습니다.');continue;}
   const z=zone(p.level,p.x,p.y);
-  if(z==='safe'){p.hp=Math.min(100,p.hp+.35);p.san=Math.min(100,p.san+.6);}
-  else{p.san=Math.max(0,p.san-(z==='danger'?.20:.045)-(p.level===6?.13:0));}
-  if(p.level===14){p.san=Math.max(0,p.san-1.2);if(p.san<=0)dead(p,'Level 14의 낙원에서 정신력을 모두 잃었습니다.');}
+  if(p.level===14){
+   p.san=Math.max(0,p.san-1.2);
+   if(p.san<=0)dead(p,'Level 14의 낙원에서 정신력을 모두 잃었습니다.');
+  }else if(LEVEL_DIFFICULTY[p.level].grade===0){
+   p.hp=Math.min(100,p.hp+.25);
+   p.san=Math.min(100,p.san+.4);
+  }else if(z==='safe'){
+   p.hp=Math.min(100,p.hp+.35);p.san=Math.min(100,p.san+.6);
+  }else{
+   p.san=Math.max(0,p.san-(z==='danger'?.20:.045)-(p.level===6?.13:0)-(p.level===13?.12:0));
+  }
   if(p.san<20&&Math.random()<.035)send(p.ws,{type:'hallucination',text:'누군가 바로 뒤에 서 있는 것 같습니다.'});
   if(!p.nextEvent)p.nextEvent=now+12000;
   if(now>=p.nextEvent){p.nextEvent=now+27000+Math.random()*27000;performEvent(p);}
