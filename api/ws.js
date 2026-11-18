@@ -45,8 +45,8 @@ function accountKey(name){return ACCOUNT_PREFIX+name.toLowerCase()}
 function secureSame(a,b){const x=Buffer.from(a,'hex'),y=Buffer.from(b,'hex');return x.length===y.length&&crypto.timingSafeEqual(x,y)}
 async function hashPass(pass,salt){return (await scrypt(pass,salt,64)).toString('hex')}
 function emptySave(){let m=MAPS[0];return {level:0,x:m.spawn.x,y:m.spawn.y,hp:100,san:100,inv:['인포머'],dead:false,discovered:[0],eventLog:[],visited:[0]}}
-function normalizedSave(o){let t=emptySave();if(!o||typeof o!=='object')return t;const level=Number(o.level);if(!Number.isInteger(level)||level<0||level>20)return t;let x=Number(o.x),y=Number(o.y);if(!Number.isFinite(x)||!Number.isFinite(y)||!floor(level,x,y)){x=MAPS[level].spawn.x;y=MAPS[level].spawn.y;}return {level,x,y,hp:Math.max(0,Math.min(100,Number(o.hp)||0)),san:Math.max(0,Math.min(100,Number(o.san)||0)),inv:Array.isArray(o.inv)?['인포머',...o.inv.filter(v=>typeof v==='string'&&v!=='인포머').slice(0,11)]:['인포머'],dead:!!o.dead,discovered:Array.isArray(o.discovered)?o.discovered.filter(n=>Number.isInteger(n)&&n>=0&&n<=20).slice(0,21):[0],eventLog:Array.isArray(o.eventLog)?o.eventLog.slice(-30):[],visited:Array.isArray(o.visited)?o.visited.filter(n=>Number.isInteger(n)&&n>=0&&n<=20).slice(0,21):[0],nick:typeof o.nick==='string'?label(o.nick):'',color:/^#[0-9a-fA-F]{6}$/.test(o.color||'')?o.color:'#94c8da'};}
-function serialize(p){return {level:p.level,x:p.x,y:p.y,hp:p.hp,san:p.san,inv:p.inv,dead:p.dead,discovered:p.discovered,eventLog:p.eventLog,visited:p.visited,nick:p.nick,color:p.color,savedAt:Date.now()}}
+function normalizedSave(o){let t=emptySave();if(!o||typeof o!=='object')return t;const level=Number(o.level);if(!Number.isInteger(level)||level<0||level>20)return t;let x=Number(o.x),y=Number(o.y);if(!Number.isFinite(x)||!Number.isFinite(y)||!floor(level,x,y)){x=MAPS[level].spawn.x;y=MAPS[level].spawn.y;}return {level,x,y,hp:Math.max(0,Math.min(100,Number(o.hp)||0)),san:Math.max(0,Math.min(100,Number(o.san)||0)),inv:Array.isArray(o.inv)?['인포머',...o.inv.filter(v=>typeof v==='string'&&v!=='인포머').slice(0,11)]:['인포머'],dead:!!o.dead,deathReason:typeof o.deathReason==='string'?o.deathReason.slice(0,180):'',discovered:Array.isArray(o.discovered)?o.discovered.filter(n=>Number.isInteger(n)&&n>=0&&n<=20).slice(0,21):[0],eventLog:Array.isArray(o.eventLog)?o.eventLog.slice(-30):[],visited:Array.isArray(o.visited)?o.visited.filter(n=>Number.isInteger(n)&&n>=0&&n<=20).slice(0,21):[0],nick:typeof o.nick==='string'?label(o.nick):'',color:/^#[0-9a-fA-F]{6}$/.test(o.color||'')?o.color:'#94c8da'};}
+function serialize(p){return {level:p.level,x:p.x,y:p.y,hp:p.hp,san:p.san,inv:p.inv,dead:p.dead,deathReason:p.deathReason||'',discovered:p.discovered,eventLog:p.eventLog,visited:p.visited,nick:p.nick,color:p.color,savedAt:Date.now()}}
 async function persist(p){if(!redisReady||!p.account)return;try{await redis.set(SAVE_PREFIX+p.account,JSON.stringify(serialize(p)))}catch(e){console.error('save failure',e.message)}}
 async function authenticate(a){
  if(!redis)throw Error('Redis 연결 설정이 없습니다.');
@@ -188,7 +188,7 @@ function tickEntities(){
 function room(p){return p.level===0?'0:'+p.id:String(p.level)}
 function near(p,obj,r=62){return Math.hypot(p.x-(obj.x+(obj.w||0)/2),p.y-(obj.y+(obj.h||0)/2))<r;}
 function move(p,dx,dy,ms){let d=Math.hypot(dx,dy)||1,delta=Math.max(0,Math.min(0.2,ms/1000));let mx=dx/d*delta*SPEED,my=dy/d*delta*SPEED;const r=9;let X=p.x+mx,Y=p.y+my;if(floor(p.level,X-r,p.y-r)&&floor(p.level,X+r,p.y+r)&&floor(p.level,X-r,p.y+r)&&floor(p.level,X+r,p.y-r))p.x=X;if(floor(p.level,p.x-r,Y-r)&&floor(p.level,p.x+r,Y+r)&&floor(p.level,p.x-r,Y+r)&&floor(p.level,p.x+r,Y-r))p.y=Y;}
-function dead(p,reason){if(p.dead)return;p.dead=true;p.downed=false;persist(p);send(p.ws,{type:'dead',reason});broadcast(p.level,{type:'event',text:p.nick+'이(가) 사망했습니다.'},p.ws);}
+function dead(p,reason){if(p.dead)return;p.dead=true;p.downed=false;p.deathReason=String(reason||'사망').slice(0,180);persist(p);send(p.ws,{type:'dead',reason});broadcast(p.level,{type:'event',text:p.nick+'이(가) 사망했습니다.'},p.ws);}
 function switchLevel(p,t){const dest=+t.targetLevel;if(!Number.isInteger(dest)||dest<0||dest>20)return;const m=MAPS[dest];broadcast(p.level,{type:'leave',id:p.id});p.level=dest;p.x=Number(t.targetX)||m.spawn.x;p.y=Number(t.targetY)||m.spawn.y;if(!floor(dest,p.x,p.y)){p.x=m.spawn.x;p.y=m.spawn.y;}p.deadz=0;p.nextEvent=Date.now()+11000;p.eventEffect=null;
  if(LEVEL_DIFFICULTY[dest].cap===0)entities.delete(room(p));
  if(!p.discovered.includes(dest))p.discovered.push(dest);
@@ -332,13 +332,15 @@ wss.on('connection',ws=>{
       lastMove:Date.now(),lastChat:0,deadz:0,dead:false,downed:false,discovered:saved.discovered||[0],visited:saved.visited||[0],eventLog:saved.eventLog||[],nextEvent:Date.now()+12000,saveBusy:false};
     clients.set(uid,p);
     const priorZone=zone(p.level,p.x,p.y);
-    let offlineDead=false;
-    if(saved.dead||priorZone==='danger'||(priorZone==='caution'&&old&&Math.random()<.15)){offlineDead=true;}
+    let offlineDead=false,offlineDeathReason='',offlineDeathLevel=p.level;
+    if(saved.dead){offlineDead=true;offlineDeathReason=saved.deathReason||'이전 탐험에서 사망했습니다.';}
+    else if(old&&priorZone==='danger'){offlineDead=true;offlineDeathReason='위험구역에서 접속이 종료되어 사망 처리되었습니다.';}
+    else if(old&&priorZone==='caution'&&Math.random()<.15){offlineDead=true;offlineDeathReason='주의구역에서 접속이 종료되어 사망 판정이 발생했습니다.';}
     if(offlineDead){const history={discovered:[...p.discovered],visited:[...p.visited],eventLog:[...p.eventLog]};Object.assign(p,emptySave(),history);await persist(p);}
     send(ws,{type:'welcome',id:uid,level:p.level,mapCount:21,items:p.inv,token:auth.token,account:auth.name,
-      restored:!!old,offlineDead});
+      restored:!!old,offlineDead,offlineDeathReason,offlineDeathLevel});
     send(ws,{type:'level',level:p.level,x:p.x,y:p.y});sendJournal(p);
-    if(offlineDead)send(ws,{type:'notice',text:'이전 탐험에서 사망했습니다. Level 0에서 새로 시작합니다.'});
+    if(offlineDead)send(ws,{type:'notice',text:'이전 탐험의 사망 기록을 확인해 주세요.'});
     else if(p.level!==0)broadcast(p.level,{type:'join',player:sprite(p)},ws);
     return;
    }catch(e){send(ws,{type:'auth_error',text:e.message||'로그인에 실패했습니다.'});}
