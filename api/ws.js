@@ -233,7 +233,7 @@ function tickWorld(){
   if(z==='safe'){p.hp=Math.min(100,p.hp+.35);p.san=Math.min(100,p.san+.6);}
   else{p.san=Math.max(0,p.san-(z==='danger'?.20:.045)-(p.level===6?.13:0));}
   if(p.level===14){p.hp=Math.max(0,p.hp-.5);p.san=Math.max(0,p.san-1.2);if(p.hp<=0)dead(p,'Level 14에서 생명이 다했습니다.');}
-  if(p.san<20&&Math.random()<.07)send(p.ws,{type:'hallucination',text:'누군가 바로 뒤에 서 있는 것 같습니다.'});
+  if(p.san<20&&Math.random()<.035)send(p.ws,{type:'hallucination',text:'누군가 바로 뒤에 서 있는 것 같습니다.'});
   if(!p.nextEvent)p.nextEvent=now+12000;
   if(now>=p.nextEvent){p.nextEvent=now+27000+Math.random()*27000;performEvent(p);}
  }
@@ -277,7 +277,7 @@ function revive(p,msg){
  send(target.ws,{type:'revived',text:p.nick+'이(가) 구조했습니다.'});send(p.ws,{type:'notice',text:target.nick+' 구조 성공!'});
  persist(target);
 }
-function onMessage(p,raw){if(raw.length>1500)return;let m;try{m=JSON.parse(raw)}catch{return}const now=Date.now();if(m.type==='move'&&!p.dead&&!p.downed){const delta=Math.max(0,Math.min(now-p.lastMove,120));p.lastMove=now;let dx=Math.max(-1,Math.min(1,+m.dx||0)),dy=Math.max(-1,Math.min(1,+m.dy||0));if(dx||dy){const mult=p.eventEffect?.kind==='slow'&&p.eventEffect.until>now?.62:1;move(p,dx*mult,dy*mult,delta);}const z=zone(p.level,p.x,p.y);if(z==='dead'){p.deadz+=delta;if(p.deadz>=1000)dead(p,'데드존에 1초 동안 머물렀습니다.')}else p.deadz=0;return;}
+function onMessage(p,raw){if(raw.length>1500)return;let m;try{m=JSON.parse(raw)}catch{return}const now=Date.now();if(m.type==='move'&&!p.dead&&!p.downed){const delta=Math.max(0,Math.min(now-p.lastMove,120));p.lastMove=now;let dx=Math.max(-1,Math.min(1,+m.dx||0)),dy=Math.max(-1,Math.min(1,+m.dy||0));if(dx||dy){const mult=p.eventEffect?.kind==='slow'&&p.eventEffect.until>now?.62:1;move(p,dx,dy,delta*mult);}const z=zone(p.level,p.x,p.y);if(z==='dead'){p.deadz+=delta;if(p.deadz>=1000)dead(p,'데드존에 1초 동안 머물렀습니다.')}else p.deadz=0;return;}
  if(m.type==='interact'&&!p.dead&&!p.downed){interact(p,m);persist(p);}
  if(m.type==='jump'&&!p.dead){for(const o of MAPS[p.level].objects)if(o.kind==='trigger'&&o.requiresAction==='jump_10'&&near(p,o,60)){p.jumps=p.jumps||{};p.jumps[o.id]=(p.jumps[o.id]||0)+1;if(p.jumps[o.id]>=10)switchLevel(p,o);}}
  if(m.type==='chat'&&!p.dead&&p.level!==0&&now-p.lastChat>550){p.lastChat=now;let body=String(m.text||'').trim().slice(0,140);if(body)broadcast(p.level,{type:'chat',from:p.nick,text:body});}
@@ -318,7 +318,7 @@ wss.on('connection',ws=>{
     const priorZone=zone(p.level,p.x,p.y);
     let offlineDead=false;
     if(saved.dead||priorZone==='danger'||(priorZone==='caution'&&old&&Math.random()<.15)){offlineDead=true;}
-    if(offlineDead){Object.assign(p,emptySave());await persist(p);}
+    if(offlineDead){const history={discovered:[...p.discovered],visited:[...p.visited],eventLog:[...p.eventLog]};Object.assign(p,emptySave(),history);await persist(p);}
     send(ws,{type:'welcome',id:uid,level:p.level,mapCount:21,items:p.inv,token:auth.token,account:auth.name,
       restored:!!old,offlineDead});
     send(ws,{type:'level',level:p.level,x:p.x,y:p.y});sendJournal(p);
